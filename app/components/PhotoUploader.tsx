@@ -9,16 +9,41 @@ interface ExifData {
   timestamp: string | null;
 }
 
-function convertDMSToDecimal(
-  dms: [number, number, number] | undefined,
-  ref: string | undefined
-): number | null {
-  if (!dms || !ref) return null;
-  const [degrees, minutes, seconds] = dms;
+function getStringTagValue(tag: unknown): string | undefined {
+  if (!tag || typeof tag !== "object") return undefined;
+  const t = tag as { value?: string[]; description?: string | string[] };
+  if (typeof t.description === "string") return t.description;
+  if (Array.isArray(t.value) && t.value.length > 0 && typeof t.value[0] === "string") {
+    return t.value[0];
+  }
+  return undefined;
+}
+
+function getGPSDecimal(coordTag: unknown, refTag: unknown): number | null {
+  if (!coordTag || typeof coordTag !== "object" || !refTag || typeof refTag !== "object") {
+    return null;
+  }
+
+  const coord = coordTag as { value?: [[number, number], [number, number], [number, number]] };
+  const ref = refTag as { value?: string[] };
+
+  if (!coord.value || !ref.value?.length) return null;
+
+  const [[degNum, degDen], [minNum, minDen], [secNum, secDen]] = coord.value;
+
+  if (degDen === 0 || minDen === 0 || secDen === 0) return null;
+
+  const degrees = degNum / degDen;
+  const minutes = minNum / minDen;
+  const seconds = secNum / secDen;
+
   let decimal = degrees + minutes / 60 + seconds / 3600;
-  if (ref === "S" || ref === "W") {
+
+  const refValue = ref.value[0];
+  if (refValue === "S" || refValue === "W") {
     decimal = -decimal;
   }
+
   return decimal;
 }
 
@@ -26,6 +51,7 @@ export default function PhotoUploader() {
   const [exifData, setExifData] = useState<ExifData | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleFileChange = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -34,8 +60,8 @@ export default function PhotoUploader() {
 
       setLoading(true);
       setExifData(null);
+      setError(null);
 
-      // Create preview
       const objectUrl = URL.createObjectURL(file);
       setPreview(objectUrl);
 
@@ -45,35 +71,31 @@ export default function PhotoUploader() {
 
         console.log("All EXIF tags:", tags);
 
-        // Extract GPS coordinates
-        const latitude = convertDMSToDecimal(
-          tags.GPSLatitude?.value as [number, number, number] | undefined,
-          tags.GPSLatitudeRef?.value as string | undefined
+        const latitude = getGPSDecimal(tags.GPSLatitude, tags.GPSLatitudeRef);
+        const longitude = getGPSDecimal(
+          tags.GPSLongitude,
+          tags.GPSLongitudeRef
         );
 
-        const longitude = convertDMSToDecimal(
-          tags.GPSLongitude?.value as [number, number, number] | undefined,
-          tags.GPSLongitudeRef?.value as string | undefined
-        );
-
-        // Extract timestamp
         const timestamp =
-          (tags.DateTimeOriginal?.value as string | undefined) ||
-          (tags.DateTime?.value as string | undefined) ||
-          (tags.CreateDate?.value as string | undefined) ||
+          getStringTagValue(tags.DateTimeOriginal) ||
+          getStringTagValue(tags.DateTimeDigitized) ||
+          getStringTagValue(tags.DateTime) ||
           null;
 
         const data: ExifData = { latitude, longitude, timestamp };
         setExifData(data);
 
-        // Log to console as requested
         console.log("=== EXIF Data ===");
         console.log("Latitude:", latitude);
         console.log("Longitude:", longitude);
         console.log("Timestamp:", timestamp);
         console.log("=================");
-      } catch (error) {
-        console.error("Error reading EXIF data:", error);
+      } catch (err) {
+        console.error("Error reading EXIF data:", err);
+        setError(
+          err instanceof Error ? err.message : "Failed to read EXIF data"
+        );
       } finally {
         setLoading(false);
       }
@@ -124,6 +146,12 @@ export default function PhotoUploader() {
         <div className="flex items-center gap-2 text-zinc-500">
           <div className="w-5 h-5 border-2 border-zinc-300 border-t-zinc-600 rounded-full animate-spin" />
           Reading EXIF data...
+        </div>
+      )}
+
+      {error && (
+        <div className="w-full bg-red-50 text-red-600 rounded-lg p-4 border border-red-200">
+          {error}
         </div>
       )}
 
